@@ -1,0 +1,46 @@
+name: Upload Shorts to YouTube
+
+# Uploads every Short that has shorts/.../<slug>.json + <slug>.mp4 but no <slug>.youtube.json yet,
+# then commits <slug>.youtube.json (video id + link). Re-tries on a schedule if an upload failed.
+on:
+  push:
+    branches: [main]
+    paths: ["shorts/**/*.json", "shorts/**/*.mp4"]
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: youtube-upload
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Upload pending Shorts
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        run: python tools/yt_upload.py
+      - name: Commit results
+        if: always()
+        run: |
+          git config user.name "youtube-upload-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A shorts
+          if git diff --cached --quiet; then echo "No new results"; exit 0; fi
+          git commit -m "YouTube upload results [skip ci]"
+          for i in 1 2 3; do git pull --rebase origin main && git push origin HEAD:main && break; sleep 5; done
